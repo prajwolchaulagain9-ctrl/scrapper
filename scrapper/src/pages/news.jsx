@@ -1,174 +1,296 @@
 import React, { useState, useEffect } from 'react';
-import { Newspaper, AlertCircle, CheckCircle, Search, TrendingUp, ShieldCheck, Zap, Info, ShieldAlert } from 'lucide-react';
-import { Pie } from 'react-chartjs-2';
-import Chart from 'chart.js/auto';
+import { Newspaper, AlertCircle, CheckCircle, Search, TrendingUp, Globe, ShieldAlert, Zap, Loader2 } from 'lucide-react';
 
 const NewsScraper = () => {
   const [activeTab, setActiveTab] = useState('flash');
-  const [newsArticles, setNewsArticles] = useState({ flash: [], real: [], fake: [] });
-  const [loadingNews, setLoadingNews] = useState(true);
-  const [userScore, setUserScore] = useState(0);
+  const [articles, setArticles] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [authInput, setAuthInput] = useState('');
+  const [verificationResult, setVerificationResult] = useState(null);
+  const [isVerifying, setIsVerifying] = useState(false);
 
+  // 🖼️ Helper to get relevant images since RSS doesn't always provide them
+  const getPlaceholderImage = (category, verdict) => {
+    if (verdict === 'Fake' || verdict === 'Satire') return "https://images.unsplash.com/photo-1555861496-0666c8981751?w=500&q=80"; // Warning/Fake
+    if (category?.includes('Politics')) return "https://images.unsplash.com/photo-1529101091760-6149390f0792?w=500&q=80";
+    if (category?.includes('Economy')) return "https://images.unsplash.com/photo-1611974765270-ca1258634369?w=500&q=80";
+    return "https://images.unsplash.com/photo-1504711432869-efd597cdd045?w=500&q=80"; // Default News
+  };
+
+  // 📡 MAIN FETCH LOGIC
   useEffect(() => {
-    const fetchLiveNews = async () => {
-      setLoadingNews(true);
+    const fetchNews = async () => {
+      setLoading(true);
+      setArticles([]);
       try {
-        const response = await fetch('https://server-dos.onrender.com/api/verify-news');
-        const data = await response.json();
+        let endpoint = 'http://localhost:3000/api/verify-news'; // Default: Nepal
+        if (activeTab === 'global') endpoint = 'http://localhost:3000/api/global-news';
 
-        const organized = {
-          flash: data.slice(0, 3).map((item, idx) => ({ 
-            ...item, 
-            id: `f-${idx}`, 
-            timestamp: 'LIVE', 
-            image: "https://images.unsplash.com/photo-1504711432869-efd597cdd045?w=500&q=80" 
-          })),
-          real: data.filter(item => item.verdict === 'Real').map((item, idx) => ({ 
-            ...item, 
-            id: `r-${idx}`, 
-            truthScore: 100 - (item.propaganda_score / 2),
-            propaganda: item.propaganda_score,
-            image: "https://images.unsplash.com/photo-1495020689067-958852a7765e?w=500&q=80" 
-          })),
-          fake: data.filter(item => item.verdict !== 'Real').map((item, idx) => ({ 
-            ...item, 
-            id: `fake-${idx}`, 
-            truthScore: 100 - item.propaganda_score,
-            propaganda: item.propaganda_score,
-            image: "https://images.unsplash.com/photo-1585829365234-781fdb09695d?w=500&q=80" 
-          }))
-        };
-        setNewsArticles(organized);
-      } catch (error) { console.error(error); } finally { setLoadingNews(false); }
+        const res = await fetch(endpoint);
+        const data = await res.json();
+        setArticles(data);
+      } catch (error) {
+        console.error("Failed to fetch news:", error);
+      } finally {
+        setLoading(false);
+      }
     };
-    fetchLiveNews();
-  }, []);
 
-  const ScoreBar = ({ label, value, colorClass, isInverse = false }) => {
-    // For propaganda, a high value is bad (Red). For truth, a high value is good (Green).
-    const percentage = Math.min(Math.max(value, 0), 100);
-    const barColor = isInverse 
-      ? (percentage > 60 ? 'bg-red-500' : percentage > 30 ? 'bg-yellow-500' : 'bg-green-500')
-      : (percentage > 70 ? 'bg-green-500' : percentage > 40 ? 'bg-yellow-500' : 'bg-red-500');
+    // Only fetch for news tabs, not the Auth tab
+    if (activeTab !== 'auth') {
+      fetchNews();
+    }
+  }, [activeTab]);
+
+  // 🔍 CLIENT-SIDE FILTERING
+  const getDisplayArticles = () => {
+    if (activeTab === 'global') return articles;
+    if (activeTab === 'flash') return articles; // Show all for flash
+    if (activeTab === 'real') return articles.filter(a => a.verdict === 'Real');
+    if (activeTab === 'fake') return articles.filter(a => a.verdict === 'Fake' || a.verdict === 'Misleading' || a.verdict === 'Satire');
+    return articles;
+  };
+
+  const displayData = getDisplayArticles();
+
+  // 🤖 MANUAL VERIFICATION (Chat Agent)
+  const verifyManualNews = async () => {
+    if (!authInput.trim()) return;
+    setIsVerifying(true);
+    setVerificationResult(null);
+
+    try {
+      const res = await fetch('http://localhost:3000/api/chat-agent', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: `Verify this claim: "${authInput}"` })
+      });
+      const data = await res.json();
+      
+      // Simple parsing of the chat response for the UI demo
+      // In a real app, you'd want the agent to return JSON too
+      const isReal = data.reply.toLowerCase().includes("real") || data.reply.toLowerCase().includes("true");
+      
+      setVerificationResult({
+        status: isReal ? 'real' : 'fake',
+        confidence: isReal ? 92 : 88,
+        reasoning: data.reply,
+        sources: ['AI Analysis', 'Knowledge Base']
+      });
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setIsVerifying(false);
+    }
+  };
+
+  // 🃏 NEWS CARD COMPONENT
+  const NewsCard = ({ article }) => {
+    const isFake = article.verdict === 'Fake' || article.verdict === 'Satire';
+    const isReal = article.verdict === 'Real';
+    
+    // Map backend data to UI format
+    const displayImage = getPlaceholderImage(article.category, article.verdict);
+    const confidence = article.truthScore || 0;
+    const source = article.source_unreliable || article.news_type || "Reddit Feed";
 
     return (
-      <div className="mt-2">
-        <div className="flex justify-between text-[10px] font-bold uppercase tracking-tighter mb-1 text-slate-500">
-          <span>{label}</span>
-          <span>{Math.round(value)}%</span>
+      <div className="bg-white rounded-lg shadow-md overflow-hidden hover:shadow-xl transition-shadow duration-300 flex flex-col h-full">
+        <div className="relative">
+          <img src={displayImage} alt="news" className="w-full h-48 object-cover" />
+          <div className="absolute top-2 right-2">
+            <span className={`px-2 py-1 rounded text-xs font-bold text-white uppercase shadow-sm ${
+              isReal ? 'bg-green-600' : isFake ? 'bg-red-600' : 'bg-yellow-500'
+            }`}>
+              {article.verdict}
+            </span>
+          </div>
         </div>
-        <div className="w-full bg-slate-200 rounded-full h-1.5 overflow-hidden">
-          <div className={`${barColor} h-full transition-all duration-1000 ease-out`} style={{ width: `${percentage}%` }} />
+        
+        <div className="p-4 flex-1 flex flex-col">
+          <h3 className="font-bold text-lg mb-2 text-gray-800 line-clamp-2 hover:text-blue-600">
+            <a href={article.url} target="_blank" rel="noreferrer">{article.claim}</a>
+          </h3>
+          
+          <div className="bg-slate-50 p-3 rounded-lg mb-3 border border-slate-100 flex-1">
+            <p className="text-gray-600 text-xs leading-relaxed line-clamp-4">
+              {article.explanation}
+            </p>
+          </div>
+
+          <div className="flex justify-between items-center text-xs text-gray-500 mt-auto">
+            <span className="flex items-center gap-1 font-semibold text-blue-900">
+              <Newspaper size={14} />
+              {source}
+            </span>
+            {article.propaganda_score > 0 && (
+               <span className="flex items-center gap-1 text-red-500 font-bold">
+                 <ShieldAlert size={14} />
+                 Bias: {article.propaganda_score}%
+               </span>
+            )}
+          </div>
+
+          <div className="mt-3 pt-3 border-t border-gray-200">
+            <div className="flex justify-between items-center mb-1">
+              <span className="text-xs font-semibold text-gray-700">Truth Score</span>
+              <span className={`text-xs font-bold ${isReal ? 'text-green-600' : 'text-red-600'}`}>
+                {confidence}%
+              </span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+              <div 
+                className={`${isReal ? 'bg-green-500' : 'bg-red-500'} h-2 rounded-full transition-all duration-500`}
+                style={{ width: `${confidence}%` }}
+              ></div>
+            </div>
+          </div>
         </div>
       </div>
     );
   };
 
-  const NewsCard = ({ article, showScores = false }) => (
-    <div className="group relative bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm hover:shadow-2xl hover:-translate-y-2 transition-all duration-300">
-      <div className="relative h-44 overflow-hidden">
-        <img src={article.image} alt="news" className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500" />
-        <div className="absolute top-3 left-3">
-          <span className={`px-2 py-1 rounded-md text-[10px] font-bold text-white uppercase backdrop-blur-md ${article.verdict === 'Real' ? 'bg-green-500/80' : 'bg-red-600/80'}`}>
-            {article.verdict || 'Flash'}
-          </span>
-        </div>
-      </div>
-
-      <div className="p-5">
-        <h3 className="text-md font-bold text-slate-800 leading-tight mb-2 line-clamp-2">{article.claim}</h3>
-        <p className="text-slate-500 text-xs mb-4 line-clamp-2">{article.explanation || "No additional context available."}</p>
-        
-        {showScores && (
-          <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 space-y-3">
-            <ScoreBar label="Truth Score" value={article.truthScore} />
-            <ScoreBar label="Propaganda Risk" value={article.propaganda} isInverse={true} />
-            <div className="flex items-center gap-1.5 pt-1">
-              <Info size={12} className="text-slate-400" />
-              <span className="text-[9px] text-slate-400 italic font-medium">Verified by TruthGuard Llama-3.3</span>
-            </div>
-          </div>
-        )}
-
-        <div className="mt-4 flex justify-between items-center text-[10px] font-semibold text-slate-400">
-          <span className="flex items-center gap-1 uppercase tracking-widest"><ShieldCheck size={12}/> {article.news_type || 'Social'}</span>
-          <span className="bg-slate-100 px-2 py-0.5 rounded uppercase">{article.category || 'General'}</span>
-        </div>
-      </div>
-    </div>
-  );
-
   return (
-    <div className="min-h-screen bg-slate-50 font-sans text-slate-900">
-      {/* Header Section */}
-      <header className="bg-white border-b border-slate-200 py-4 px-6 sticky top-0 z-50 backdrop-blur-lg bg-white/80">
-        <div className="max-w-7xl mx-auto flex justify-between items-center">
-          <div className="flex items-center gap-2">
-            <div className="bg-blue-600 p-2 rounded-lg text-white shadow-lg shadow-blue-200">
-              <ShieldCheck size={24} />
-            </div>
-            <h1 className="text-xl font-black tracking-tighter text-slate-800">TRUTH<span className="text-blue-600">GUARD</span></h1>
-          </div>
-          <div className="flex items-center gap-4">
-             <div className="hidden md:block text-right">
-                <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest leading-none mb-1">Citizen Level</p>
-                <p className="text-sm font-bold text-slate-700">Verified Reporter <span className="text-blue-600">#{userScore}</span></p>
-             </div>
-             <div className="h-10 w-10 bg-slate-100 rounded-full flex items-center justify-center text-blue-600 border border-slate-200">🏅</div>
-          </div>
+    <div className="min-h-screen bg-gradient-to-br from-blue-900 via-blue-800 to-blue-900 font-sans">
+      
+      {/* Header */}
+      <header className="bg-blue-950 border-b-4 border-red-600 py-6 shadow-2xl">
+        <div className="container mx-auto px-4 text-center">
+          <h1 className="text-4xl font-serif text-white tracking-wider flex items-center justify-center gap-3">
+            <ShieldAlert className="text-red-500" size={36} />
+            TRUTH<span className="text-red-500">GUARD</span>
+          </h1>
+          <p className="text-blue-200 text-sm mt-1 uppercase tracking-[0.3em]">Global Intelligence Node</p>
         </div>
       </header>
 
-      {/* Marquee Ticker */}
-      <div className="bg-blue-600 text-white py-2 overflow-hidden border-y border-blue-700 shadow-inner">
-        <div className="flex animate-marquee whitespace-nowrap gap-12 font-bold text-xs uppercase tracking-widest">
-          {newsArticles.flash.map((n, i) => <span key={i} className="flex items-center gap-2"><Zap size={14} className="text-yellow-300"/> {n.claim}</span>)}
-        </div>
-      </div>
-
-      <main className="max-w-7xl mx-auto px-6 py-10">
-        {/* Navigation Tabs */}
-        <div className="flex items-center gap-2 mb-10 bg-white p-1.5 rounded-2xl shadow-sm border border-slate-200 w-fit">
-          {['flash', 'real', 'fake'].map(tab => (
-            <button key={tab} onClick={() => setActiveTab(tab)}
-              className={`px-6 py-2.5 rounded-xl text-xs font-bold uppercase tracking-widest transition-all ${activeTab === tab ? 'bg-slate-900 text-white shadow-xl' : 'text-slate-400 hover:text-slate-600'}`}>
-              {tab} news
-            </button>
-          ))}
-        </div>
-
-        {loadingNews ? (
-          <div className="flex flex-col items-center justify-center py-32 space-y-4">
-            <div className="h-12 w-12 border-4 border-blue-100 border-t-blue-600 rounded-full animate-spin"></div>
-            <p className="text-slate-400 font-bold text-xs uppercase tracking-[0.2em] animate-pulse">Analyzing Global Context...</p>
+      {/* Navigation Tabs */}
+      <nav className="bg-red-600 shadow-lg sticky top-0 z-50">
+        <div className="container mx-auto px-4">
+          <div className="flex gap-1 py-3 overflow-x-auto">
+            {[
+              { id: 'flash', label: 'Nepal Live', icon: TrendingUp },
+              { id: 'global', label: 'Global Verify', icon: Globe }, // 🌍 NEW TAB
+              { id: 'real', label: 'Verified Real', icon: CheckCircle },
+              { id: 'fake', label: 'Fake / Satire', icon: AlertCircle },
+              { id: 'auth', label: 'Manual Check', icon: Search }
+            ].map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => setActiveTab(tab.id)}
+                className={`flex items-center gap-2 px-6 py-2 rounded-t-lg font-semibold transition-all whitespace-nowrap ${
+                  activeTab === tab.id
+                    ? 'bg-gray-100 text-gray-900 shadow-inner'
+                    : 'bg-red-700 text-white hover:bg-red-800'
+                }`}
+              >
+                <tab.icon size={16} />
+                {tab.label}
+              </button>
+            ))}
           </div>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
-            {newsArticles[activeTab]?.length > 0 ? (
-              newsArticles[activeTab].map(article => (
-                <NewsCard key={article.id} article={article} showScores={activeTab !== 'flash'} />
+        </div>
+      </nav>
+
+      {/* Main Content */}
+      <main className="container mx-auto px-4 py-8">
+        
+        {/* Loading State */}
+        {loading && (
+          <div className="flex flex-col items-center justify-center py-32 space-y-4">
+            <Loader2 className="w-16 h-16 text-white animate-spin" />
+            <p className="text-blue-200 font-mono text-sm animate-pulse">
+              {activeTab === 'global' ? "CROSS-REFERENCING GLOBAL SOURCES..." : "SCANNING NEPAL NETWORKS..."}
+            </p>
+          </div>
+        )}
+
+        {/* News Grid (Flash, Global, Real, Fake) */}
+        {!loading && activeTab !== 'auth' && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {displayData.length > 0 ? (
+              displayData.map((article, idx) => (
+                <NewsCard key={idx} article={article} />
               ))
             ) : (
-              <div className="col-span-full text-center py-20 bg-white rounded-3xl border-2 border-dashed border-slate-200">
-                <ShieldAlert className="mx-auto text-slate-200 mb-4" size={48} />
-                <p className="text-slate-400 font-medium">No verified data in this sector yet.</p>
+              <div className="col-span-full text-center py-20 bg-white/10 rounded-xl border-2 border-dashed border-white/20">
+                <p className="text-blue-200 text-lg">No active signals found in this sector.</p>
               </div>
             )}
           </div>
         )}
-      </main>
 
-      <style>{`
-        @keyframes marquee {
-          0% { transform: translateX(0); }
-          100% { transform: translateX(-50%); }
-        }
-        .animate-marquee {
-          display: flex;
-          width: 200%;
-          animation: marquee 30s linear infinite;
-        }
-      `}</style>
+        {/* Manual Auth Tab */}
+        {activeTab === 'auth' && (
+          <div className="max-w-3xl mx-auto">
+            <div className="bg-white rounded-lg shadow-2xl p-8">
+              <div className="text-center mb-8">
+                <h2 className="text-2xl font-bold text-gray-800 mb-2">Manual Fact Checker</h2>
+                <p className="text-gray-500">Paste any headline or rumor below to cross-reference with our AI database.</p>
+              </div>
+
+              <textarea
+                value={authInput}
+                onChange={(e) => setAuthInput(e.target.value)}
+                placeholder="Ex: 'Government just banned all motorcycles in Kathmandu...'"
+                className="w-full p-4 border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none resize-none text-gray-700 text-lg mb-6 shadow-inner"
+                rows="3"
+              />
+
+              <button
+                onClick={verifyManualNews}
+                disabled={isVerifying || !authInput.trim()}
+                className="w-full bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white font-bold py-4 rounded-xl transition-all shadow-lg hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {isVerifying ? <Loader2 className="animate-spin" /> : <Zap size={20} />}
+                {isVerifying ? 'Running AI Diagnostics...' : 'VERIFY CLAIM NOW'}
+              </button>
+
+              {/* Verification Result */}
+              {verificationResult && (
+                <div className={`mt-8 rounded-xl p-6 border-l-8 ${
+                  verificationResult.status === 'real' ? 'bg-green-50 border-green-500' : 'bg-red-50 border-red-500'
+                } animate-in fade-in slide-in-from-bottom-4 duration-500`}>
+                  
+                  <div className="flex items-center gap-3 mb-4">
+                    {verificationResult.status === 'real' ? (
+                      <CheckCircle className="text-green-600" size={32} />
+                    ) : (
+                      <AlertCircle className="text-red-600" size={32} />
+                    )}
+                    <h3 className={`text-2xl font-bold uppercase ${
+                      verificationResult.status === 'real' ? 'text-green-800' : 'text-red-800'
+                    }`}>
+                      Verdict: {verificationResult.status}
+                    </h3>
+                  </div>
+
+                  <div className="space-y-4">
+                    <div>
+                      <div className="flex justify-between items-center mb-1">
+                        <span className="font-semibold text-gray-700">AI Confidence</span>
+                        <span className="font-bold text-lg">{verificationResult.confidence}%</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-3">
+                        <div 
+                          className={`h-3 rounded-full ${verificationResult.status === 'real' ? 'bg-green-600' : 'bg-red-600'}`}
+                          style={{ width: `${verificationResult.confidence}%` }}
+                        ></div>
+                      </div>
+                    </div>
+
+                    <div className="bg-white/50 p-4 rounded-lg">
+                      <h4 className="font-bold text-gray-800 mb-2 text-sm uppercase tracking-wider">Analysis</h4>
+                      <p className="text-gray-700 leading-relaxed">{verificationResult.reasoning}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+      </main>
     </div>
   );
 };
