@@ -1,5 +1,5 @@
 
-import NewsScraper from "./pages/main"
+import NewsScraper from "./pages/news"
 function App() {
 
   return (
