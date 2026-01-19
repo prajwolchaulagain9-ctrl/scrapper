@@ -13,7 +13,7 @@ const NewsScraper = () => {
     const fetchLiveNews = async () => {
       setLoadingNews(true);
       try {
-        const response = await fetch('http://localhost:3000/api/verify-news');
+        const response = await fetch('https://server-dos.onrender.com/api/verify-news');
         const data = await response.json();
 
         const organized = {
